@@ -20,12 +20,15 @@ const app = express();
 const PORT = process.env.PORT || 5001;
 const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/spectraguard";
 
-// Ensure directories exist
-const dirs = ["uploads", "processed"];
-dirs.forEach((dir) => {
-  const dirPath = path.join(__dirname, dir);
-  if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
-});
+// Ensure directories exist (Skip on Vercel, as FS is read-only)
+const isVercel = process.env.VERCEL === "1" || !!process.env.NOW_REGION;
+if (!isVercel) {
+  const dirs = ["uploads", "processed"];
+  dirs.forEach((dir) => {
+    const dirPath = path.join(__dirname, dir);
+    if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+  });
+}
 
 // Middleware
 app.use(cors());
@@ -51,18 +54,17 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// MongoDB connection and server start
+// MongoDB connection (Global)
 mongoose
   .connect(MONGO_URI)
-  .then(() => {
-    console.log("[SPECTRA GUARD] MongoDB connected successfully");
-    app.listen(PORT, () => {
-      console.log(`[SPECTRA GUARD] API Server running on port ${PORT}`);
-    });
-  })
-  .catch((err) => {
-    console.error("[SPECTRA GUARD] MongoDB connection failed:", err.message);
-    process.exit(1);
+  .then(() => console.log("[SPECTRA GUARD] MongoDB connected successfully"))
+  .catch((err) => console.error("[SPECTRA GUARD] MongoDB connection error:", err.message));
+
+// Server start (Only if NOT running as a serverless function)
+if (!isVercel) {
+  app.listen(PORT, () => {
+    console.log(`[SPECTRA GUARD] API Server running on port ${PORT}`);
   });
+}
 
 module.exports = app;
