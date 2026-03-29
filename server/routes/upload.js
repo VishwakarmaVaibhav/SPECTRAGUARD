@@ -154,13 +154,22 @@ router.post("/image", upload.single("file"), async (req, res) => {
       total_detections: logEntries.length,
     });
   } catch (error) {
-    console.error("Image processing error:", error.response?.data || error.message);
+    let details = error.response?.data || error.message;
+    let errorMessage = "Failed to process image via ngrok service";
+    
+    // Check if ngrok returned an HTML error page (Tunnel offline or expired)
+    if (typeof details === "string" && details.includes("<!DOCTYPE html>")) {
+      errorMessage = "ML SERVICE OFFLINE: The ngrok tunnel is down. Please restart your ML service and ngrok.";
+      details = "ERR_NGROK_OFFLINE";
+    }
+
+    console.error("Image processing error:", details);
     if (req.file && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
     }
-    res.status(500).json({
-      error: "Failed to process image via ngrok service",
-      details: error.response?.data || error.message,
+    res.status(502).json({
+      error: errorMessage,
+      details: details,
     });
   }
 });
@@ -246,13 +255,21 @@ router.post("/video", upload.single("file"), async (req, res) => {
       frames_processed: mlData.frames_analyzed || 0,
     });
   } catch (error) {
-    console.error("Video processing error:", error.response?.data || error.message);
+    let details = error.response?.data || error.message;
+    let errorMessage = "Failed to process video";
+    
+    if (typeof details === "string" && details.includes("<!DOCTYPE html>")) {
+      errorMessage = "ML SERVICE OFFLINE: The ngrok tunnel is down. Please restart your ML service and ngrok.";
+      details = "ERR_NGROK_OFFLINE";
+    }
+
+    console.error("Video processing error:", details);
     if (req.file && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
     }
-    res.status(500).json({
-      error: "Failed to process video",
-      details: error.response?.data || error.message,
+    res.status(502).json({
+      error: errorMessage,
+      details: details,
     });
   }
 });
@@ -327,13 +344,21 @@ router.post("/frame", upload.single("file"), async (req, res) => {
       raw_output: mlData
     });
   } catch (error) {
-    console.error("Frame proxy error:", error.response?.data || error.message);
+    let details = error.response?.data || error.message;
+    let errorMessage = "Failed to proxy frame to ML service";
+
+    if (typeof details === "string" && details.includes("<!DOCTYPE html>")) {
+      errorMessage = "ML SERVICE OFFLINE: The ngrok tunnel is down. Please restart your ML service and ngrok.";
+      details = "ERR_NGROK_OFFLINE";
+    }
+
+    console.error("Frame proxy error:", details);
     if (req.file && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
     }
-    res.status(500).json({
-      error: "Failed to proxy frame to ML service",
-      details: error.response?.data || error.message,
+    res.status(502).json({
+      error: errorMessage,
+      details: details,
     });
   }
 });
