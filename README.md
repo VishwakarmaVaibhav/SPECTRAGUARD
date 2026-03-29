@@ -56,6 +56,11 @@ npm run dev
 
 The system uses JWT-based **Role-Based Access Control (RBAC)** to serve specialized dashboards:
 
+### Global Landing (Hero)
+- **Cinematic Entry**: High-tech landing experience for the base `/` route.
+- **System Overview**: Pre-authentication highlight of AI capabilities.
+- **Secure Access**: Direct navigation to the Command Terminal auth layer.
+
 ### Police Mode (Field Units)
 - **Mobile-Optimized Interface**: Large tap targets for on-the-go interaction.
 - **Image Upload Zone**: Directly process imagery through YOLO.
