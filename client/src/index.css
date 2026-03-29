@@ -1,0 +1,160 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    border-radius: 0 !important;
+  }
+
+  body {
+    @apply bg-sg-black text-sg-text font-sans m-0 p-0;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: #111111;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #333333;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #555555;
+  }
+}
+
+@layer components {
+  .sg-panel {
+    @apply bg-sg-panel border border-sg-border;
+  }
+
+  .sg-card {
+    @apply bg-sg-card border border-sg-border p-4;
+  }
+
+  .sg-btn {
+    @apply px-4 py-2 font-mono text-sm font-bold uppercase tracking-wider
+           border border-sg-border bg-sg-card text-sg-text
+           hover:bg-sg-border transition-colors duration-150 cursor-pointer;
+  }
+
+  .sg-btn-primary {
+    @apply sg-btn border-sg-green text-sg-green hover:bg-sg-green hover:text-black;
+  }
+
+  .sg-btn-danger {
+    @apply sg-btn border-sg-red text-sg-red hover:bg-sg-red hover:text-black;
+  }
+
+  .sg-input {
+    @apply bg-sg-black border border-sg-border text-sg-text px-3 py-2
+           font-mono text-sm focus:outline-none focus:border-sg-green;
+  }
+
+  .sg-label {
+    @apply text-xs font-mono uppercase tracking-widest text-sg-muted;
+  }
+
+  .sg-table {
+    @apply w-full text-sm font-mono;
+  }
+
+  .sg-table th {
+    @apply text-left px-3 py-2 bg-sg-black border-b border-sg-border
+           text-sg-muted uppercase text-xs tracking-wider;
+  }
+
+  .sg-table td {
+    @apply px-3 py-2 border-b border-sg-border text-sg-text;
+  }
+
+  .sg-table tr:hover td {
+    @apply bg-sg-card;
+  }
+
+  .status-intrusion {
+    @apply text-sg-red font-bold;
+  }
+
+  .status-authorized {
+    @apply text-sg-green font-bold;
+  }
+
+  .status-unknown {
+    @apply text-sg-amber font-bold;
+  }
+
+  /* Scan line overlay for surveillance feel */
+  .scanline-overlay {
+    pointer-events: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 255, 65, 0.015) 2px,
+      rgba(0, 255, 65, 0.015) 4px
+    );
+    z-index: 1;
+  }
+
+  /* Blinking status dot */
+  .blink-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background: #00ff41;
+    animation: blink 1.5s ease-in-out infinite;
+  }
+
+  .blink-dot-red {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background: #ff0000;
+    animation: blink 0.8s ease-in-out infinite;
+  }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.2; }
+  }
+
+  /* Upload zone */
+  .upload-zone {
+    @apply border-2 border-dashed border-sg-border bg-sg-black
+           flex flex-col items-center justify-center cursor-pointer
+           transition-colors duration-200 min-h-[200px];
+  }
+
+  .upload-zone:hover {
+    @apply border-sg-green bg-sg-panel;
+  }
+
+  .upload-zone.drag-over {
+    @apply border-sg-green bg-sg-panel;
+  }
+
+  /* Log box (scrolling terminal style) */
+  .log-box {
+    @apply bg-black border border-sg-border font-mono text-xs p-3
+           overflow-y-auto;
+    max-height: 400px;
+  }
+
+  .log-entry {
+    @apply py-1 border-b border-sg-border/30;
+  }
+}
