@@ -64,17 +64,17 @@ router.post("/image", upload.single("file"), async (req, res) => {
       contentType: req.file.mimetype || "image/jpeg"
     });
 
-    const ML_BASE = process.env.ML_SERVICE_URL || "https://virtuous-jerrie-unsterile.ngrok-free.dev";
-    const NGROK_URL = `${ML_BASE}/analyze-frame`;
+    const ML_BASE = process.env.ML_SERVICE_URL || "https://akshatabhat23-forest-intrusion.hf.space";
+    const ML_URL = `${ML_BASE}/analyze-frame`;
 
     const headers = {
       ...form.getHeaders(),
       "ngrok-skip-browser-warning": "true"
     };
 
-    console.log(`[ML PROXY] Initiating request to: ${NGROK_URL}`);
+    console.log(`[ML PROXY] Initiating request to: ${ML_URL}`);
 
-    const mlResponse = await axios.post(NGROK_URL, form, {
+    const mlResponse = await axios.post(ML_URL, form, {
       headers,
       maxContentLength: Infinity,
       maxBodyLength: Infinity,
@@ -85,10 +85,11 @@ router.post("/image", upload.single("file"), async (req, res) => {
 
     const mlData = mlResponse.data;
 
-    // Parse detections from the summary array or default
+    // Parse detections from the detections array or summary
     let detections = [];
-    if (mlData.summary && Array.isArray(mlData.summary)) {
-      detections = mlData.summary.map(item => {
+    const rawDetections = mlData.detections || mlData.summary || [];
+    if (Array.isArray(rawDetections)) {
+      detections = rawDetections.map(item => {
         if (typeof item === 'string') {
           return {
             object_class: item,
@@ -154,13 +155,13 @@ router.post("/image", upload.single("file"), async (req, res) => {
       total_detections: logEntries.length,
     });
   } catch (error) {
+    let errorMessage = "IMAGE_PROCESSING_ERROR: Failed to reach the ML engine.";
     let details = error.response?.data || error.message;
-    let errorMessage = "Failed to process image via ngrok service";
-    
-    // Check if ngrok returned an HTML error page (Tunnel offline or expired)
+
+    // Check if the service returned an HTML error page (Offline or interstitial)
     if (typeof details === "string" && details.includes("<!DOCTYPE html>")) {
-      errorMessage = "ML SERVICE OFFLINE: The ngrok tunnel is down. Please restart your ML service and ngrok.";
-      details = "ERR_NGROK_OFFLINE";
+      errorMessage = "ML SERVICE OFFLINE: The Hugging Face Space or ML service is down. Please check the service status.";
+      details = "ERR_ML_SERVICE_OFFLINE";
     }
 
     console.error("Image processing error:", details);
@@ -190,15 +191,15 @@ router.post("/video", upload.single("file"), async (req, res) => {
       contentType: req.file.mimetype || "video/mp4"
     });
 
-    const ML_BASE = process.env.ML_SERVICE_URL || "https://virtuous-jerrie-unsterile.ngrok-free.dev";
-    const NGROK_VIDEO_URL = `${ML_BASE}/analyze-video`;
+    const ML_BASE = process.env.ML_SERVICE_URL || "https://akshatabhat23-forest-intrusion.hf.space";
+    const ML_VIDEO_URL = `${ML_BASE}/analyze-video`;
 
     const headers = {
       ...form.getHeaders(),
       "ngrok-skip-browser-warning": "true"
     };
 
-    const mlResponse = await axios.post(NGROK_VIDEO_URL, form, {
+    const mlResponse = await axios.post(ML_VIDEO_URL, form, {
       headers,
       maxContentLength: Infinity,
       maxBodyLength: Infinity,
@@ -206,7 +207,7 @@ router.post("/video", upload.single("file"), async (req, res) => {
     });
 
     const mlData = mlResponse.data;
-    const results = mlData.results || [];
+    const results = mlData.detections || mlData.results || [];
 
     const processedDir = path.join(__dirname, "..", "processed");
     if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir, { recursive: true });
@@ -216,6 +217,17 @@ router.post("/video", upload.single("file"), async (req, res) => {
     fs.copyFileSync(req.file.path, localProcessedPath);
 
     fs.unlinkSync(req.file.path);
+
+    const { assignedTo } = req.body;
+    let assignedOfficers = [];
+    if (assignedTo) {
+      try {
+        assignedOfficers = JSON.parse(assignedTo);
+        if (!Array.isArray(assignedOfficers)) assignedOfficers = [assignedOfficers];
+      } catch (err) {
+        assignedOfficers = [assignedTo];
+      }
+    }
 
     // Deduplicate detections for DB (aggregate per class)
     const uniqueDetections = [];
@@ -230,7 +242,7 @@ router.post("/video", upload.single("file"), async (req, res) => {
         const key = `${object_class}-${status}`;
         if (!seen.has(key)) {
           seen.add(key);
-          uniqueDetections.push({
+          const entry = {
             timestamp: new Date(),
             source: "video",
             object_class,
@@ -238,7 +250,11 @@ router.post("/video", upload.single("file"), async (req, res) => {
             status,
             uploadedBy: req.user._id,
             imageUrl: `/processed/${processedName}`
-          });
+          };
+          if (assignedOfficers.length > 0) {
+            entry.assignedTo = assignedOfficers;
+          }
+          uniqueDetections.push(entry);
         }
       }
     }
@@ -259,8 +275,8 @@ router.post("/video", upload.single("file"), async (req, res) => {
     let errorMessage = "Failed to process video";
     
     if (typeof details === "string" && details.includes("<!DOCTYPE html>")) {
-      errorMessage = "ML SERVICE OFFLINE: The ngrok tunnel is down. Please restart your ML service and ngrok.";
-      details = "ERR_NGROK_OFFLINE";
+      errorMessage = "ML SERVICE OFFLINE: The Hugging Face Space or ML service is down. Please check the service status.";
+      details = "ERR_ML_SERVICE_OFFLINE";
     }
 
     console.error("Video processing error:", details);
@@ -284,21 +300,31 @@ router.post("/frame", upload.single("file"), async (req, res) => {
     }
 
     const { assignedTo } = req.body;
+    let assignedOfficers = [];
+    if (assignedTo) {
+      try {
+        assignedOfficers = JSON.parse(assignedTo);
+        if (!Array.isArray(assignedOfficers)) assignedOfficers = [assignedOfficers];
+      } catch (err) {
+        assignedOfficers = [assignedTo];
+      }
+    }
+
     const form = new FormData();
     form.append("file", fs.createReadStream(req.file.path), {
       filename: req.file.originalname,
       contentType: "image/jpeg"
     });
 
-    const ML_BASE = process.env.ML_SERVICE_URL || "https://virtuous-jerrie-unsterile.ngrok-free.dev";
-    const NGROK_URL = `${ML_BASE}/analyze-frame`;
+    const ML_BASE = process.env.ML_SERVICE_URL || "https://akshatabhat23-forest-intrusion.hf.space";
+    const ML_URL = `${ML_BASE}/analyze-frame`;
 
     const headers = {
       ...form.getHeaders(),
       "ngrok-skip-browser-warning": "true"
     };
 
-    const mlResponse = await axios.post(NGROK_URL, form, {
+    const mlResponse = await axios.post(ML_URL, form, {
       headers,
       maxContentLength: Infinity,
       maxBodyLength: Infinity,
@@ -306,7 +332,7 @@ router.post("/frame", upload.single("file"), async (req, res) => {
     });
 
     const mlData = mlResponse.data;
-    const summary = mlData.summary || [];
+    const summary = mlData.detections || mlData.summary || [];
 
     const processedDir = path.join(__dirname, "..", "processed");
     if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir, { recursive: true });
@@ -326,8 +352,8 @@ router.post("/frame", upload.single("file"), async (req, res) => {
         uploadedBy: req.user._id,
         imageUrl: `/processed/${frameName}`
       };
-      if (assignedTo && assignedTo !== "none") {
-        entry.assignedTo = assignedTo;
+      if (assignedOfficers.length > 0) {
+        entry.assignedTo = assignedOfficers;
       }
       return entry;
     });
@@ -348,8 +374,8 @@ router.post("/frame", upload.single("file"), async (req, res) => {
     let errorMessage = "Failed to proxy frame to ML service";
 
     if (typeof details === "string" && details.includes("<!DOCTYPE html>")) {
-      errorMessage = "ML SERVICE OFFLINE: The ngrok tunnel is down. Please restart your ML service and ngrok.";
-      details = "ERR_NGROK_OFFLINE";
+      errorMessage = "ML SERVICE OFFLINE: The Hugging Face Space or ML service is down. Please check the service status.";
+      details = "ERR_ML_SERVICE_OFFLINE";
     }
 
     console.error("Frame proxy error:", details);

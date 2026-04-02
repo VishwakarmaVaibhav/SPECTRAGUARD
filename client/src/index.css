@@ -157,4 +157,9 @@
   .log-entry {
     @apply py-1 border-b border-sg-border/30;
   }
+
+  /* Mirrored preview for front-facing cameras */
+  .mirrored-preview {
+    transform: scaleX(-1);
+  }
 }

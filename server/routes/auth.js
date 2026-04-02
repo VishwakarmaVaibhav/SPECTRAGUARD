@@ -43,34 +43,5 @@ router.post("/login", async (req, res) => {
   }
 });
 
-/**
- * POST /api/auth/setup
- * Development route to seed initial admin and police users if they don't exist
- */
-router.post("/setup", async (req, res) => {
-  try {
-    const adminExists = await User.findOne({ role: "admin" });
-    if (!adminExists) {
-      await User.create({
-        username: "admin",
-        password: "password", // In production, never set default passwords
-        role: "admin",
-      });
-    }
-
-    const policeExists = await User.findOne({ username: "officer_1" });
-    if (!policeExists) {
-      await User.create({
-        username: "officer_1",
-        password: "password",
-        role: "police",
-      });
-    }
-
-    res.status(200).json({ message: "Seed users created (if they didn't exist)." });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
 
 module.exports = router;

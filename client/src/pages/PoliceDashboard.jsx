@@ -48,8 +48,8 @@ export default function PoliceDashboard({ token }) {
     };
 
     window.addEventListener("paste", handlePaste);
-    // Refresh activity every 5 seconds for real-time alerts
-    const interval = setInterval(fetchRecentActivity, 5000);
+    // Refresh activity every 4 seconds for real-time alerts
+    const interval = setInterval(fetchRecentActivity, 4000);
     return () => {
       clearInterval(interval);
       window.removeEventListener("paste", handlePaste);
@@ -178,7 +178,7 @@ export default function PoliceDashboard({ token }) {
   const intrusionCount = detections.filter((d) => d.status === "INTRUSION").length;  const [selectedImage, setSelectedImage] = useState(null);
 
   return (
-    <div className="h-full overflow-y-auto w-full flex flex-col gap-6 p-2 md:p-6 max-w-4xl mx-auto pb-20 custom-scrollbar">
+    <div className="w-full min-h-screen flex flex-col gap-6 p-2 md:p-6 max-w-4xl mx-auto pb-20 custom-scrollbar">
       
       {/* Enlarged Image/Video Modal */}
       {selectedImage && (
@@ -347,7 +347,7 @@ export default function PoliceDashboard({ token }) {
       </div>
 
       {/* Recent Activity Feed (24h) */}
-      <div className="sg-card p-0 shadow-xl overflow-hidden flex flex-col h-[500px]">
+      <div className="sg-card p-0 shadow-xl flex flex-col min-h-[600px]">
         {/* Header */}
         <div className="p-4 border-b border-sg-border bg-sg-panel flex items-center justify-between z-10">
           <div className="flex items-center gap-2">

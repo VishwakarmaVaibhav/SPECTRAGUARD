@@ -43,12 +43,11 @@ const detectionLogSchema = new mongoose.Schema(
       type: String,
       required: false,
     },
-    assignedTo: {
+    assignedTo: [{
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: false, // Used when an Admin assigns a live feed detection to an officer
-      index: true,
-    },
+      required: false, // Used when an Admin assigns a live feed detection to one or more officers
+    }],
     createdAt: {
       type: Date,
       default: Date.now,

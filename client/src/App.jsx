@@ -5,7 +5,10 @@ import PoliceDashboard from "./pages/PoliceDashboard";
 import AdminDashboard from "./pages/AdminDashboard";
 import DocumentPage from "./pages/DocumentPage";
 import Hero from "./pages/Hero";
+import ProfileView from "./pages/ProfileView";
 import Footer from "./components/Footer";
+import { User } from "lucide-react";
+import { Link } from "react-router-dom";
 
 const DOCS_CONTENT = `SPECTRA GUARD V.1 
 CORE ARCHITECTURE DOCUMENTATION
@@ -60,34 +63,39 @@ function App() {
   };
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-sg-black">
+    <div className="flex flex-col min-h-screen w-screen bg-sg-black overflow-x-hidden">
       {/* Global Top Bar */}
       {auth && (
         <header className="h-16 shrink-0 bg-sg-panel border-b border-sg-border flex items-center justify-between px-4 md:px-6 relative z-20">
           <div className="flex items-center gap-2">
             <div className="w-3 h-3 bg-sg-green animate-pulse"></div>
-            <span className="font-mono text-sm md:text-base text-white tracking-widest font-bold">
+            <Link to="/" className="font-mono text-sm md:text-base text-white tracking-widest font-bold hover:opacity-80 transition-opacity">
               SPECTRA<span className="text-sg-green">GUARD</span> <span className="text-sg-muted opacity-50 hidden md:inline">| {auth.role.toUpperCase()} TERMINAL</span>
-            </span>
+            </Link>
           </div>
           <div className="flex items-center gap-4">
-            <span className="font-mono text-xs text-sg-muted hidden sm:inline">
-              USER: {auth.username.toUpperCase()}
-            </span>
-            <button 
-              onClick={handleLogout}
-              className="sg-btn text-xs px-3 border-sg-red text-sg-red hover:bg-sg-red hover:text-white"
-            >
-              DISCONNECT
-            </button>
+            <div className="flex items-center gap-3">
+              <span className="font-mono text-[10px] md:text-xs text-sg-muted hidden sm:inline uppercase">
+                NODE_SIGNAL: <span className="text-sg-green">ACTIVE</span>
+              </span>
+              <Link 
+                to={auth.role === "admin" ? "/admin/profile" : "/profile"} 
+                className="flex items-center gap-2 px-3 py-1.5 border border-sg-border bg-sg-black hover:border-sg-green transition-all group"
+              >
+                <User size={14} className="text-sg-muted group-hover:text-sg-green" />
+                <span className="font-mono text-[10px] md:text-xs text-white uppercase font-bold tracking-tighter">
+                  {auth.username}
+                </span>
+              </Link>
+            </div>
           </div>
         </header>
       )}
 
       {/* Main Content Area */}
-      <main className="flex-1 relative bg-sg-black flex flex-col overflow-hidden">
+      <main className="flex-1 relative bg-sg-black flex flex-col">
         <div className="scanline-overlay pointer-events-none"></div>
-        <div className="relative z-10 w-full flex-1 h-full min-h-0">
+        <div className="relative z-10 w-full flex-1">
           <Routes>
             <Route path="/" element={<Hero />} />
             <Route path="/login" element={
@@ -107,8 +115,12 @@ function App() {
               !auth ? (
                 <Navigate to="/login" replace />
               ) : auth.role === "police" ? (
-                <div className="p-2 md:p-6 w-full h-full"> 
-                  <PoliceDashboard token={auth.token} />
+                <div className="w-full"> 
+                   <Routes>
+                     <Route path="/" element={<PoliceDashboard token={auth.token} auth={auth} onLogout={handleLogout} />} />
+                     <Route path="/profile" element={<ProfileView auth={auth} onLogout={handleLogout} />} />
+                     <Route path="*" element={<Navigate to="/" replace />} />
+                   </Routes>
                 </div>
               ) : auth.role === "admin" ? (
                 <Navigate to="/admin/dashboard" replace />
@@ -119,7 +131,7 @@ function App() {
             
             {/* Admin specific nested route wildcard */}
             {auth && auth.role === "admin" && (
-              <Route path="/admin/*" element={<AdminDashboard token={auth.token} />} />
+              <Route path="/admin/*" element={<AdminDashboard token={auth.token} auth={auth} onLogout={handleLogout} />} />
             )}
           </Routes>
         </div>

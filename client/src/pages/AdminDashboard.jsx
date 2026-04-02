@@ -11,20 +11,37 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
+import { 
+  Camera, 
+  Video, 
+  Users, 
+  ShieldCheck, 
+  LayoutDashboard,
+  Activity,
+  AlertTriangle,
+  Monitor,
+  Menu,
+  X
+} from "lucide-react";
+import ProfileView from "./ProfileView";
 import Sidebar from "../components/Sidebar";
 import ImageMode from "./ImageMode";
 import VideoMode from "./VideoMode";
 import WebcamMode from "./WebcamMode";
+import AuthRegistry from "./AuthRegistry";
 
 const ADMIN_TABS = [
   { id: "dashboard", label: "COMMAND CENTER", icon: "▤" },
   { id: "staff", label: "STAFF MANAGEMENT", icon: "👤" },
+  { id: "auth-registry", label: "AUTH REGISTRY", icon: "🛡️" },
   { id: "image", label: "IMAGE ANALYSIS", icon: "◩" },
   { id: "video", label: "VIDEO ANALYSIS", icon: "▶" },
   { id: "webcam", label: "LIVE FEED [BETA]", icon: "◉" },
+  { id: "profile", label: "MY PROFILE", icon: "👤" },
 ];
 
-export default function AdminDashboard({ token }) {
+export default function AdminDashboard({ token, auth, onLogout }) {
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -37,49 +54,56 @@ export default function AdminDashboard({ token }) {
 
   const activeTab = getActiveTab();
 
+  // --- WEBCAM MONITORING STATE (LIFTED) ---
+  const [webcamActive, setWebcamActive] = useState(false);
+  const [webcamStream, setWebcamStream] = useState(null);
+  const [liveLogs, setLiveLogs] = useState([]);
+  const [selectedCamera, setSelectedCamera] = useState("");
+  const [assignedOfficers, setAssignedOfficers] = useState([]); // Array of IDs
+
   const handleTabChange = (id) => {
     navigate(`/admin/${id}`);
+    setIsSidebarOpen(false);
   };
 
   return (
-    <div className="flex w-full h-full pb-16 md:pb-0 overflow-hidden">
-      {/* Sidebar hidden on small screens, shown on md+ */}
-      <div className="hidden md:block">
-        <Sidebar tabs={ADMIN_TABS} activeTab={activeTab} onTabChange={handleTabChange} />
+    <div className="flex w-full min-h-screen relative">
+      <div className={`fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm md:relative md:bg-transparent md:block md:inset-auto md:backdrop-blur-none transition-opacity duration-300 ${isSidebarOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none md:opacity-100 md:pointer-events-auto"}`} onClick={() => setIsSidebarOpen(false)}>
+        <div className={`w-64 h-screen sticky top-0 bg-sg-panel border-r border-sg-border transition-transform duration-300 ease-out ${isSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`} onClick={e => e.stopPropagation()}>
+           <div className="p-4 border-b border-sg-border flex justify-between items-center md:hidden">
+              <span className="font-mono text-xs text-sg-green font-bold tracking-widest">MENU</span>
+              <button onClick={() => setIsSidebarOpen(false)} className="text-sg-muted"><X size={20} /></button>
+           </div>
+           <Sidebar tabs={ADMIN_TABS} activeTab={activeTab} onTabChange={handleTabChange} />
+        </div>
       </div>
 
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col overflow-hidden p-4 md:p-6 w-full">
-        <Routes>
-          <Route path="dashboard" element={<CommandCenterView token={token} />} />
-          <Route path="staff" element={<StaffManagementView token={token} />} />
-          <Route path="image" element={<ImageMode token={token} />} />
-          <Route path="video" element={<VideoMode token={token} />} />
-          <Route path="webcam" element={<WebcamMode token={token} />} />
-          <Route path="*" element={<Navigate to="dashboard" replace />} />
-        </Routes>
-      </div>
+      <div className="flex-1 flex flex-col w-full relative">
+        <button 
+          onClick={() => setIsSidebarOpen(true)}
+          className="md:hidden absolute top-4 left-4 z-40 bg-sg-panel/80 backdrop-blur-sm p-2 border border-sg-border text-sg-green hover:bg-sg-green hover:text-black transition-all shadow-[0_0_15px_rgba(0,255,65,0.1)]"
+        >
+          <Menu size={20} />
+        </button>
 
-      {/* Mobile Bottom Nav */}
-      <div className="md:hidden fixed bottom-0 left-0 w-full h-16 bg-sg-panel border-t border-sg-border flex z-50 overflow-x-auto">
-        {ADMIN_TABS.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => handleTabChange(tab.id)}
-            className={`flex-1 flex flex-col items-center justify-center min-w-[80px] ${
-              activeTab === tab.id ? "text-sg-green border-t-2 border-sg-green bg-sg-card" : "text-sg-muted"
-            }`}
-          >
-            <span className="text-xl">{tab.icon}</span>
-            <span className="text-[10px] font-mono mt-1 whitespace-nowrap px-1">{tab.label}</span>
-          </button>
-        ))}
+        <div className="flex-1 flex flex-col p-4 md:p-6">
+          <Routes>
+            <Route path="dashboard" element={<CommandCenterView token={token} webcamActive={webcamActive} webcamStream={webcamStream} liveLogs={liveLogs} />} />
+            <Route path="staff" element={<StaffManagementView token={token} />} />
+            <Route path="auth-registry" element={<AuthRegistry token={token} />} />
+            <Route path="image" element={<ImageMode token={token} />} />
+            <Route path="video" element={<VideoMode token={token} />} />
+            <Route path="webcam" element={<WebcamMode token={token} webcamActive={webcamActive} setWebcamActive={setWebcamActive} webcamStream={webcamStream} setWebcamStream={setWebcamStream} liveLogs={liveLogs} setLiveLogs={setLiveLogs} selectedCamera={selectedCamera} setSelectedCamera={setSelectedCamera} assignedOfficers={assignedOfficers} setAssignedOfficers={setAssignedOfficers} />} />
+            <Route path="profile" element={<ProfileView auth={auth} onLogout={onLogout} />} />
+            <Route path="*" element={<Navigate to="dashboard" replace />} />
+          </Routes>
+        </div>
       </div>
     </div>
   );
 }
 
-function CommandCenterView({ token }) {
+function CommandCenterView({ token, webcamActive, webcamStream, liveLogs }) {
   const [summary, setSummary] = useState(null);
   const [logs, setLogs] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -88,6 +112,16 @@ function CommandCenterView({ token }) {
   const [selectedImage, setSelectedImage] = useState(null);
 
   const authConfig = { headers: { Authorization: `Bearer ${token}` } };
+
+  const deleteLog = async (id) => {
+    if (!window.confirm("ARE YOU SURE YOU WANT TO PURGE THIS EVIDENCE LOG?")) return;
+    try {
+      await axios.delete(`/api/admin/logs/${id}`, authConfig);
+      fetchData(); // Refresh all
+    } catch (err) {
+      alert("Failed to delete log.");
+    }
+  };
 
   useEffect(() => {
     fetchData();
@@ -121,7 +155,7 @@ function CommandCenterView({ token }) {
   const CHART_COLORS = ["#00ff41", "#ff0000", "#ffbf00", "#ffffff", "#888888"];
 
   return (
-    <div className="w-full h-full flex flex-col overflow-hidden">
+    <div className="w-full h-fit flex flex-col">
       {/* Evidence Modal stays the same */}
       {selectedImage && (
         <div 
@@ -170,7 +204,7 @@ function CommandCenterView({ token }) {
       )}
 
       {!loading && summary && (
-        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        <div className="flex-1 flex flex-col">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6 shrink-0">
             <KPICard label="TOTAL EVENTS" value={summary.totalEvents} color="text-white" />
             <KPICard label="INTRUSIONS" value={summary.totalIntrusions} color="text-sg-red" alert={summary.totalIntrusions > 0} />
@@ -178,8 +212,66 @@ function CommandCenterView({ token }) {
             <KPICard label="ACTIVE FIELD UNITS" value={employees.filter(e => e.totalUploads > 0).length} color="text-sg-amber" />
           </div>
 
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-6 flex-[1.2] min-h-0">
-            <div className="xl:col-span-2 sg-card flex flex-col overflow-hidden">
+          {/* LIVE MONITORING SECTION */}
+          {(webcamActive || liveLogs.length > 0) && (
+            <div className="mb-6 animate-in slide-in-from-top duration-500">
+              <div className="sg-card border-sg-green/30 bg-sg-green/5 relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-2 flex items-center gap-2">
+                   <span className="flex h-2 w-2 relative">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sg-red opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-sg-red"></span>
+                   </span>
+                   <span className="text-[10px] font-mono text-sg-red font-bold">LIVE_SIGNAL_ACTIVE</span>
+                </div>
+                
+                <div className="flex flex-col md:flex-row gap-6">
+                  {/* Minimized Live View */}
+                  {webcamActive && (
+                    <div className="w-full md:w-64 aspect-video bg-black border border-sg-green/20 relative group">
+                      <video 
+                        ref={(el) => { if (el && webcamStream) el.srcObject = webcamStream; }}
+                        autoPlay 
+                        muted 
+                        playsInline
+                        className="w-full h-full object-cover grayscale opacity-80"
+                      />
+                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                         <Monitor className="text-sg-green/10" size={48} />
+                      </div>
+                      <div className="absolute bottom-1 left-2 text-[9px] font-mono text-sg-green bg-black/50 px-1">
+                        SRC: {webcamStream?.getVideoTracks()[0]?.label || "LOCAL_CAM"}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Real-time Ticker */}
+                  <div className="flex-1 min-h-[100px] flex flex-col">
+                    <div className="text-[10px] font-mono text-sg-green mb-2 flex items-center gap-2">
+                       <Activity size={12} /> REAL_TIME_INTELLIGENCE_FEED
+                    </div>
+                    <div className="flex-1 overflow-y-auto max-h-[120px] font-mono text-xs space-y-1 pr-2">
+                      {liveLogs.length === 0 ? (
+                        <div className="text-sg-muted italic">[ STANDBY: Awaiting detections ]</div>
+                      ) : (
+                        liveLogs.map((ll, i) => (
+                          <div key={i} className={`flex items-center gap-2 py-1 border-b border-white/5 ${ll.status === 'INTRUSION' ? 'text-sg-red' : ll.status === 'AUTHORIZED' ? 'text-sg-green' : 'text-white'}`}>
+                            <span className="text-[10px] text-sg-muted">[{new Date().toLocaleTimeString([], { hour12: false })}]</span>
+                            <span className="font-bold">{ll.object_class?.toUpperCase()}</span>
+                            <span>—</span>
+                            <span className="text-[9px] uppercase">{ll.status}</span>
+                            <span className="ml-auto text-sg-muted">CONF: {(ll.confidence * 100).toFixed(0)}%</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-6">
+            <div className="xl:col-span-2 sg-card flex flex-col min-h-[400px]">
               <div className="sg-label mb-4">DETECTIONS AGGREGATE</div>
               <div className="flex-1 min-h-0">
                 {chartData.length > 0 ? (
@@ -207,9 +299,9 @@ function CommandCenterView({ token }) {
               </div>
             </div>
 
-            <div className="sg-card flex flex-col overflow-hidden">
+            <div className="sg-card flex flex-col min-h-[400px]">
               <div className="sg-label mb-4">PERSONNEL ACTIVITY (FIELD UNITS)</div>
-              <div className="overflow-y-auto flex-1 pr-2 min-h-0">
+              <div className="overflow-y-auto flex-1 pr-2">
                 {employees.length === 0 ? (
                   <p className="font-mono text-sm text-sg-muted text-center py-4">[ NO UNITS FOUND ]</p>
                 ) : (
@@ -233,7 +325,7 @@ function CommandCenterView({ token }) {
             </div>
           </div>
 
-          <div className="sg-card flex-1 min-h-0 flex flex-col overflow-hidden">
+          <div className="sg-card flex-1 flex flex-col min-h-[500px]">
             <div className="sg-label mb-4">GLOBAL SYSTEM LOGS</div>
             <div className="flex-1 overflow-y-auto">
               <table className="sg-table w-full">
@@ -265,17 +357,21 @@ function CommandCenterView({ token }) {
                             log.status === "WILDLIFE" ? "status-authorized" :
                             log.status === "AUTHORIZED" ? "status-authorized" : "status-unknown"
                           }>■ {log.status}</td>
-                          <td>
-                            {log.imageUrl ? (
+                          <td className="flex gap-2">
+                            {log.imageUrl && (
                               <button 
                                 onClick={() => setSelectedImage(log.imageUrl)}
                                 className="text-sg-green border border-sg-green px-2 py-0.5 text-[10px] hover:bg-sg-green hover:text-black transition-all"
                               >
                                 VIEW
                               </button>
-                            ) : (
-                              <span className="text-sg-muted text-[10px]">N/A</span>
                             )}
+                            <button 
+                              onClick={() => deleteLog(log._id)}
+                              className="text-sg-red border border-sg-red px-2 py-0.5 text-[10px] hover:bg-sg-red hover:text-black transition-all"
+                            >
+                              PURGE
+                            </button>
                           </td>
                         </tr>
                       );
@@ -333,10 +429,28 @@ function StaffManagementView({ token }) {
       setNewUsername("");
       setNewPassword("");
       fetchEmployees(); // Refresh roster
-    } catch (err) {
-      setCreateError(err.response?.data?.error || "Failed to create user.");
     } finally {
       setCreateLoading(false);
+    }
+  };
+
+  const handleToggleStatus = async (id, currentStatus) => {
+    const nextStatus = currentStatus === "active" ? "suspended" : "active";
+    try {
+      await axios.patch(`/api/admin/employees/${id}/status`, { status: nextStatus }, authConfig);
+      fetchEmployees();
+    } catch (err) {
+      alert("Failed to update status.");
+    }
+  };
+
+  const handleDeleteUser = async (id, username) => {
+    if (!window.confirm(`PERMANENTLY DELETE ACCOUNT: ${username.toUpperCase()}?`)) return;
+    try {
+      await axios.delete(`/api/admin/employees/${id}`, authConfig);
+      fetchEmployees();
+    } catch (err) {
+      alert("Failed to delete user.");
     }
   };
 
@@ -426,7 +540,8 @@ function StaffManagementView({ token }) {
                       <th>CALLSIGN</th>
                       <th>REGISTRATION DATE</th>
                       <th>UPLOAD VOL.</th>
-                      <th>LAST SIGNAL</th>
+                      <th>STATUS</th>
+                      <th className="text-right">ACTIONS</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -434,11 +549,29 @@ function StaffManagementView({ token }) {
                       <tr><td colSpan="4" className="text-center text-sg-muted py-8">NO UNITS REGISTERED</td></tr>
                     ) : (
                       employees.map((emp) => (
-                        <tr key={emp._id}>
+                        <tr key={emp._id} className={emp.status === "suspended" ? "opacity-50 text-sg-red" : ""}>
                           <td className="font-bold text-white uppercase">{emp.username}</td>
                           <td className="text-sg-muted">{new Date(emp.createdAt).toLocaleDateString()}</td>
                           <td className="text-sg-green">{emp.totalUploads} SCANS</td>
-                          <td className="text-sg-muted">{emp.latestActivity ? new Date(emp.latestActivity).toLocaleString() : 'OFFLINE'}</td>
+                          <td>
+                             <span className={`text-[10px] px-1 border ${emp.status === "suspended" ? "text-sg-red border-sg-red" : "text-sg-green border-sg-green"}`}>
+                               {emp.status?.toUpperCase() || "ACTIVE"}
+                             </span>
+                          </td>
+                          <td className="text-right flex justify-end gap-2">
+                             <button 
+                               onClick={() => handleToggleStatus(emp._id, emp.status || "active")}
+                               className="text-[10px] px-2 py-1 border border-sg-muted text-sg-muted hover:border-white hover:text-white"
+                             >
+                               {emp.status === "suspended" ? "ACTIVATE" : "SUSPEND"}
+                             </button>
+                             <button 
+                               onClick={() => handleDeleteUser(emp._id, emp.username)}
+                               className="text-[10px] px-2 py-1 border border-sg-red text-sg-red hover:bg-sg-red hover:text-white"
+                             >
+                               DELETE
+                             </button>
+                          </td>
                         </tr>
                       ))
                     )}
