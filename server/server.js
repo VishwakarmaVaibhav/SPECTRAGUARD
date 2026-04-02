@@ -54,11 +54,18 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// MongoDB connection (Global)
-mongoose
-  .connect(MONGO_URI)
-  .then(() => console.log("[SPECTRA GUARD] MongoDB connected successfully"))
-  .catch((err) => console.error("[SPECTRA GUARD] MongoDB connection error:", err.message));
+// 1. Database Connection (Global)
+if (!MONGO_URI) {
+  console.error("[SPECTRA GUARD] FATAL: MONGO_URI is not defined in .env");
+} else {
+  mongoose
+    .connect(MONGO_URI, {
+      serverSelectionTimeoutMS: 5000, 
+      connectTimeoutMS: 10000,
+    })
+    .then(() => console.log("[SPECTRA GUARD] MongoDB connected successfully"))
+    .catch((err) => console.error("[SPECTRA GUARD] MongoDB connection error:", err.message));
+}
 
 // Server start (Only if NOT running as a serverless function)
 if (!isVercel) {
