@@ -130,20 +130,30 @@ export default function WebcamMode({
     }
   };
 
-  /**
-   * INITIATE RECORDER (Standalone Loop)
-   * This logic stops and starts the recorder every 4 seconds.
-   * Why? To ensure each chunk is a valid standalone WebM file with proper headers
-   * for the ML service to parse correctly.
-   */
+  // Use a ref for webcamActive to avoid stale closures in the recording loop
+  const webcamActiveRef = useRef(webcamActive);
+  useEffect(() => {
+    webcamActiveRef.current = webcamActive;
+  }, [webcamActive]);
+
   const initRecorder = (stream) => {
-    if (!stream || stream.getVideoTracks().length === 0) return;
+    if (!stream || !stream.active || stream.getVideoTracks().length === 0) {
+      console.warn("[WebcamMode] Stream inactive, skipping recorder init.");
+      return;
+    }
 
     try {
-      const options = { mimeType: 'video/webm;codecs=vp8' };
-      if (!MediaRecorder.isTypeSupported(options.mimeType)) options.mimeType = 'video/webm';
+      // Browser compatibility for MIME types
+      let mimeType = 'video/webm;codecs=vp8';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'video/webm';
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+          mimeType = 'video/mp4'; // Safari fallback
+          if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = ''; // Let browser decide
+        }
+      }
       
-      const recorder = new MediaRecorder(stream, options);
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
       mediaRecorderRef.current = recorder;
 
       recorder.ondataavailable = (event) => {
@@ -153,32 +163,40 @@ export default function WebcamMode({
       };
 
       recorder.onstop = () => {
-        // If still active, start a new 4s session
-        if (webcamActive && stream.active) {
+        // Use Ref to check the LATEST state, ignoring stale closure
+        if (webcamActiveRef.current && stream.active) {
           restartTimerRef.current = setTimeout(() => {
-            if (webcamActive) initRecorder(stream);
-          }, 100); 
+            if (webcamActiveRef.current) initRecorder(stream);
+          }, 200); 
+        } else {
+          console.log("[WebcamMode] Loop terminated safely.");
         }
       };
 
       recorder.start();
+      console.log(`[WebcamMode] Recording started (Cycle: 4000ms, MIME: ${mimeType || 'default'})`);
 
-      // Cycle every 4 seconds to create a standalone video file
+      // Cycle every 4 seconds
       restartTimerRef.current = setTimeout(() => {
-        if (recorder.state === 'recording') recorder.stop();
+        if (recorder.state === 'recording') {
+          recorder.stop();
+        }
       }, 4000);
 
     } catch (e) {
-      console.error("MediaRecorder init failed", e);
+      console.error("[WebcamMode] MediaRecorder init failed:", e);
+      setError("Recording error. Try a different camera or browser.");
     }
   };
 
   const trackingRef = useRef({});
 
   const uploadVideoChunk = async (blob) => {
+    // UI Feedback: Show analysis is happening
+    const tempId = Date.now();
+    
     const formData = new FormData();
-    const fileName = `chunk-${Date.now()}.webm`;
-    formData.append("file", blob, fileName);
+    formData.append("file", blob, `chunk-${tempId}.webm`);
     formData.append("assignedTo", JSON.stringify(assignedOfficers));
 
     try {
@@ -212,17 +230,22 @@ export default function WebcamMode({
           };
         });
 
-        // Cleanup stale objects
+        // Cleanup stale objects (increase buffer to 12s to allow for network lag)
         Object.keys(trackingRef.current).forEach(label => {
           if (!seenCurrent.has(label)) {
-            if (now - trackingRef.current[label].lastSeen > 8000) delete trackingRef.current[label];
+            if (now - trackingRef.current[label].lastSeen > 12000) delete trackingRef.current[label];
           }
         });
         
         setLiveLogs(prev => [...newLogs, ...prev].slice(0, 50));
+      } else {
+        // Heartbeat log if camera is active but no detections
+        console.log("[WebcamMode] Chunk processed: No detections.");
       }
     } catch (err) {
-      console.error("[WebcamMode] Chunk analysis failed:", err.response?.data || err.message);
+      const errorMsg = err.response?.data?.error || err.message;
+      console.error("[WebcamMode] Upload failed:", errorMsg);
+      // Optional: Add a specialized log error to the list
     }
   };
 
