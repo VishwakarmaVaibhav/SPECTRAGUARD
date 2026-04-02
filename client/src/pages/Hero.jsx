@@ -21,7 +21,7 @@ export default function Hero() {
       <nav className="relative z-20 flex items-center justify-between px-6 md:px-12 py-8 border-b border-sg-border/20 backdrop-blur-md bg-sg-black/30">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 md:w-10 md:h-10 bg-sg-panel border border-sg-green flex items-center justify-center shadow-[0_0_10px_rgba(0,255,65,0.2)]">
-            <Shield className="text-sg-green" size={20} />
+            <img src="/logo.svg" alt="Logo" className="w-6 h-6 md:w-7 md:h-7" />
           </div>
           <span className="text-lg md:text-2xl font-bold tracking-[0.2em] uppercase">
             SPECTRA<span className="text-sg-green">GUARD</span>

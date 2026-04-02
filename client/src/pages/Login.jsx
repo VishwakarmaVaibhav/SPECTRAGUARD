@@ -36,6 +36,7 @@ export default function Login({ onLogin }) {
           <div className="absolute bottom-0 right-0 w-4 h-4 border-r-2 border-b-2 border-sg-green"></div>
 
           <div className="text-center mb-8">
+            <img src="/logo.svg" alt="SG" className="w-16 h-16 mx-auto mb-4" />
             <h1 className="text-3xl font-bold font-mono text-white tracking-widest">
               SPECTRA<span className="text-sg-green">GUARD</span>
             </h1>

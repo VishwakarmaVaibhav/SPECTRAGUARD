@@ -67,8 +67,8 @@ function App() {
       {/* Global Top Bar */}
       {auth && (
         <header className="h-16 shrink-0 bg-sg-panel border-b border-sg-border flex items-center justify-between px-4 md:px-6 relative z-20">
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 bg-sg-green animate-pulse"></div>
+          <div className="flex items-center gap-3">
+            <img src="/logo.svg" alt="SG" className="w-6 h-6 md:w-8 md:h-8" />
             <Link to="/" className="font-mono text-sm md:text-base text-white tracking-widest font-bold hover:opacity-80 transition-opacity">
               SPECTRA<span className="text-sg-green">GUARD</span> <span className="text-sg-muted opacity-50 hidden md:inline">| {auth.role.toUpperCase()} TERMINAL</span>
             </Link>
