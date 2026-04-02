@@ -1,43 +1,34 @@
 /**
- * Spectra Guard — Upload Routes
- * Handles image/video file uploads, forwards to Python ML service,
- * saves detection results to MongoDB, and returns annotated output.
+ * Spectra Guard — Upload Routes (Cloudinary Powered)
+ * Handles image/video file uploads, forwards to ML service,
+ * saves to Cloudinary, and returns detection results.
  */
 
 const express = require("express");
 const multer = require("multer");
 const axios = require("axios");
 const FormData = require("form-data");
-const fs = require("fs");
-const path = require("path");
 const DetectionLog = require("../models/DetectionLog");
 const requireAuth = require("../middleware/requireAuth");
+const { uploadToCloudinary } = require("../utils/cloudinary");
 
 const router = express.Router();
 
 // Require auth for uploads
 router.use(requireAuth);
 
-// Multer configuration
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = path.join(__dirname, "..", "uploads");
-    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueName = `${Date.now()}-${file.originalname}`;
-    cb(null, uniqueName);
-  },
-});
-
+/**
+ * Multer Configuration (Memory Storage for Vercel)
+ * Files are kept in RAM until uploaded to Cloudinary/ML Service.
+ */
+const storage = multer.memoryStorage();
 const upload = multer({
   storage,
-  limits: { fileSize: 200 * 1024 * 1024 }, // 200MB
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB limit
   fileFilter: (req, file, cb) => {
     const allowedImage = /jpeg|jpg|png|bmp|webp/;
     const allowedVideo = /mp4|avi|mov|mkv|webm/;
-    const ext = path.extname(file.originalname).toLowerCase().slice(1);
+    const ext = file.originalname.split(".").pop().toLowerCase();
     if (allowedImage.test(ext) || allowedVideo.test(ext)) {
       cb(null, true);
     } else {
@@ -46,20 +37,17 @@ const upload = multer({
   },
 });
 
-const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
-
 /**
  * POST /api/upload/image
- * Upload an image → forward to HF ML service → save detections → return results
+ * Process image through ML → Upload annotated result to Cloudinary → Log to DB
  */
 router.post("/image", upload.single("file"), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded" });
-    }
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
+    // 1. Forward to ML Service
     const form = new FormData();
-    form.append("file", fs.createReadStream(req.file.path), {
+    form.append("file", req.file.buffer, {
       filename: req.file.originalname,
       contentType: req.file.mimetype || "image/jpeg"
     });
@@ -67,70 +55,27 @@ router.post("/image", upload.single("file"), async (req, res) => {
     const ML_BASE = process.env.ML_SERVICE_URL || "https://akshatabhat23-forest-intrusion.hf.space";
     const ML_URL = `${ML_BASE}/analyze-frame`;
 
-    const headers = {
-      ...form.getHeaders(),
-      "ngrok-skip-browser-warning": "true"
-    };
-
-    console.log(`[ML PROXY] Initiating request to: ${ML_URL}`);
-
+    console.log(`[ML PROXY] Requesting analysis from: ${ML_URL}`);
     const mlResponse = await axios.post(ML_URL, form, {
-      headers,
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity,
-      timeout: 60000, 
+      headers: { ...form.getHeaders(), "ngrok-skip-browser-warning": "true" },
+      timeout: 60000,
     });
 
-    console.log(`[ML PROXY] Response status: ${mlResponse.status}`);
-
     const mlData = mlResponse.data;
+    let detections = parseDetections(mlData);
 
-    // Parse detections from the detections array or summary
-    let detections = [];
-    const rawDetections = mlData.detections || mlData.summary || [];
-    if (Array.isArray(rawDetections)) {
-      detections = rawDetections.map(item => {
-        if (typeof item === 'string') {
-          return {
-            object_class: item,
-            confidence: 1.0,
-            status: mlData.intrusion_detected ? "INTRUSION" : "UNKNOWN"
-          };
-        }
-        return {
-          object_class: item.object || item.class || item.object_class || "unknown",
-          confidence: item.confidence || 1.0,
-          status: item.status ? item.status.toUpperCase() : (mlData.intrusion_detected ? "INTRUSION" : "UNKNOWN")
-        };
-      });
-    }
-
-    // Force an intrusion log if the flag is true but summary was empty
-    if (mlData.intrusion_detected && detections.length === 0) {
-      detections.push({
-        object_class: "Intrusion Activity",
-        confidence: 1.0,
-        status: "INTRUSION"
-      });
-    }
-
-    // Save annotated base64 image locally
-    const processedDir = path.join(__dirname, "..", "processed");
-    if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir, { recursive: true });
-
-    const annotated_file = `annotated-${Date.now()}.jpg`;
-    const localAnnotatedPath = path.join(processedDir, annotated_file);
-
+    // 2. Handle Result Image (Annotated or Original)
+    let finalImageBuffer = req.file.buffer;
     if (mlData.image) {
-      // Remove data URL prefix if present (e.g., data:image/jpeg;base64,)
       const base64Data = mlData.image.replace(/^data:image\/\w+;base64,/, "");
-      fs.writeFileSync(localAnnotatedPath, Buffer.from(base64Data, "base64"));
-    } else {
-      // Fallback: just copy original if no annotated image returned
-      fs.copyFileSync(req.file.path, localAnnotatedPath);
+      finalImageBuffer = Buffer.from(base64Data, "base64");
     }
 
-    // Save detections to MongoDB
+    // 3. Upload to Cloudinary
+    console.log(`[CLOUDINARY] Uploading processed image...`);
+    const cloudRes = await uploadToCloudinary(finalImageBuffer, "image", req.file.originalname);
+
+    // 4. Save to MongoDB
     const logEntries = detections.map((det) => ({
       timestamp: new Date(),
       source: "image",
@@ -138,55 +83,35 @@ router.post("/image", upload.single("file"), async (req, res) => {
       confidence: det.confidence,
       status: det.status,
       uploadedBy: req.user._id,
-      imageUrl: `/processed/${annotated_file}`
+      imageUrl: cloudRes.url,
+      cloudinary_id: cloudRes.public_id
     }));
 
-    if (logEntries.length > 0) {
-      await DetectionLog.insertMany(logEntries);
-    }
-
-    // Cleanup uploaded file
-    fs.unlinkSync(req.file.path);
+    if (logEntries.length > 0) await DetectionLog.insertMany(logEntries);
 
     res.json({
       success: true,
-      annotated_url: `/processed/${annotated_file}`,
+      annotated_url: cloudRes.url,
       detections: logEntries,
       total_detections: logEntries.length,
     });
+
   } catch (error) {
-    let errorMessage = "IMAGE_PROCESSING_ERROR: Failed to reach the ML engine.";
-    let details = error.response?.data || error.message;
-
-    // Check if the service returned an HTML error page (Offline or interstitial)
-    if (typeof details === "string" && details.includes("<!DOCTYPE html>")) {
-      errorMessage = "ML SERVICE OFFLINE: The Hugging Face Space or ML service is down. Please check the service status.";
-      details = "ERR_ML_SERVICE_OFFLINE";
-    }
-
-    console.error("Image processing error:", details);
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
-    res.status(502).json({
-      error: errorMessage,
-      details: details,
-    });
+    handleError(res, error, "Image processing failed");
   }
 });
 
 /**
  * POST /api/upload/video
- * Upload a video → forward to Python ML service → save detections → return results
+ * Process video → Upload to Cloudinary → Log to DB
  */
 router.post("/video", upload.single("file"), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded" });
-    }
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
+    // 1. Forward to ML (Video analysis)
     const form = new FormData();
-    form.append("file", fs.createReadStream(req.file.path), {
+    form.append("file", req.file.buffer, {
       filename: req.file.originalname,
       contentType: req.file.mimetype || "video/mp4"
     });
@@ -194,199 +119,145 @@ router.post("/video", upload.single("file"), async (req, res) => {
     const ML_BASE = process.env.ML_SERVICE_URL || "https://akshatabhat23-forest-intrusion.hf.space";
     const ML_VIDEO_URL = `${ML_BASE}/analyze-video`;
 
-    const headers = {
-      ...form.getHeaders(),
-      "ngrok-skip-browser-warning": "true"
-    };
-
     const mlResponse = await axios.post(ML_VIDEO_URL, form, {
-      headers,
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity,
-      timeout: 300000, // 5 min timeout for video
+      headers: { ...form.getHeaders(), "ngrok-skip-browser-warning": "true" },
+      timeout: 300000,
     });
 
     const mlData = mlResponse.data;
     const results = mlData.detections || mlData.results || [];
 
-    const processedDir = path.join(__dirname, "..", "processed");
-    if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir, { recursive: true });
+    // 2. Upload Video to Cloudinary
+    console.log(`[CLOUDINARY] Uploading video file...`);
+    const cloudRes = await uploadToCloudinary(req.file.buffer, "video", req.file.originalname);
 
-    const processedName = `video-${Date.now()}${path.extname(req.file.originalname)}`;
-    const localProcessedPath = path.join(processedDir, processedName);
-    fs.copyFileSync(req.file.path, localProcessedPath);
-
-    fs.unlinkSync(req.file.path);
-
+    // 3. Log unique detections
     const { assignedTo } = req.body;
-    let assignedOfficers = [];
-    if (assignedTo) {
-      try {
-        assignedOfficers = JSON.parse(assignedTo);
-        if (!Array.isArray(assignedOfficers)) assignedOfficers = [assignedOfficers];
-      } catch (err) {
-        assignedOfficers = [assignedTo];
-      }
-    }
+    const assignedOfficers = parseAssignedOfficers(assignedTo);
+    const uniqueDetections = extractUniqueVideoDetections(results, mlData, req.user._id, cloudRes, assignedOfficers);
 
-    // Deduplicate detections for DB (aggregate per class)
-    const uniqueDetections = [];
-    const seen = new Set();
-
-    for (const frameResult of results) {
-      for (const item of (frameResult.summary || [])) {
-        const object_class = item.object || item.class || item.object_class || "unknown";
-        const status = item.status ? item.status.toUpperCase() : (mlData.intrusion_detected ? "INTRUSION" : "UNKNOWN");
-        const confidence = item.confidence || 0;
-
-        const key = `${object_class}-${status}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          const entry = {
-            timestamp: new Date(),
-            source: "video",
-            object_class,
-            confidence,
-            status,
-            uploadedBy: req.user._id,
-            imageUrl: `/processed/${processedName}`
-          };
-          if (assignedOfficers.length > 0) {
-            entry.assignedTo = assignedOfficers;
-          }
-          uniqueDetections.push(entry);
-        }
-      }
-    }
-
-    if (uniqueDetections.length > 0) {
-      await DetectionLog.insertMany(uniqueDetections);
-    }
+    if (uniqueDetections.length > 0) await DetectionLog.insertMany(uniqueDetections);
 
     res.json({
       success: true,
-      annotated_url: `/processed/${processedName}`,
+      annotated_url: cloudRes.url,
       detections: uniqueDetections,
       total_detections: uniqueDetections.length,
-      frames_processed: mlData.frames_analyzed || 0,
     });
-  } catch (error) {
-    let details = error.response?.data || error.message;
-    let errorMessage = "Failed to process video";
-    
-    if (typeof details === "string" && details.includes("<!DOCTYPE html>")) {
-      errorMessage = "ML SERVICE OFFLINE: The Hugging Face Space or ML service is down. Please check the service status.";
-      details = "ERR_ML_SERVICE_OFFLINE";
-    }
 
-    console.error("Video processing error:", details);
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
-    res.status(502).json({
-      error: errorMessage,
-      details: details,
-    });
+  } catch (error) {
+    handleError(res, error, "Video processing failed");
   }
 });
+
 /**
  * POST /api/upload/frame
- * Proxy a single webcam frame to the external HF ML service, save logs, return data.
+ * Proxy webcam frame to ML → Save Log
  */
 router.post("/frame", upload.single("file"), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded" });
-    }
-
-    const { assignedTo } = req.body;
-    let assignedOfficers = [];
-    if (assignedTo) {
-      try {
-        assignedOfficers = JSON.parse(assignedTo);
-        if (!Array.isArray(assignedOfficers)) assignedOfficers = [assignedOfficers];
-      } catch (err) {
-        assignedOfficers = [assignedTo];
-      }
-    }
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
     const form = new FormData();
-    form.append("file", fs.createReadStream(req.file.path), {
-      filename: req.file.originalname,
-      contentType: "image/jpeg"
-    });
+    form.append("file", req.file.buffer, { filename: "frame.jpg", contentType: "image/jpeg" });
 
     const ML_BASE = process.env.ML_SERVICE_URL || "https://akshatabhat23-forest-intrusion.hf.space";
-    const ML_URL = `${ML_BASE}/analyze-frame`;
-
-    const headers = {
-      ...form.getHeaders(),
-      "ngrok-skip-browser-warning": "true"
-    };
-
-    const mlResponse = await axios.post(ML_URL, form, {
-      headers,
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity,
-      timeout: 15000, 
+    const mlResponse = await axios.post(`${ML_BASE}/analyze-frame`, form, {
+      headers: { ...form.getHeaders() },
+      timeout: 15000,
     });
 
     const mlData = mlResponse.data;
-    const summary = mlData.detections || mlData.summary || [];
+    const cloudRes = await uploadToCloudinary(req.file.buffer, "image", "webcam-frame.jpg");
 
-    const processedDir = path.join(__dirname, "..", "processed");
-    if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir, { recursive: true });
+    const { assignedTo } = req.body;
+    const assignedOfficers = parseAssignedOfficers(assignedTo);
+    
+    const logs = (mlData.detections || mlData.summary || []).map(item => ({
+      timestamp: new Date(),
+      source: "webcam",
+      object_class: item.object || item.class || "unknown",
+      confidence: item.confidence || 0,
+      status: item.status ? item.status.toUpperCase() : (mlData.intrusion_detected ? "INTRUSION" : "UNKNOWN"),
+      uploadedBy: req.user._id,
+      imageUrl: cloudRes.url,
+      cloudinary_id: cloudRes.public_id,
+      assignedTo: assignedOfficers
+    }));
 
-    const frameName = `frame-${Date.now()}.jpg`;
-    const localFramePath = path.join(processedDir, frameName);
-    fs.copyFileSync(req.file.path, localFramePath);
+    if (logs.length > 0) await DetectionLog.insertMany(logs);
 
-    // Save detections to MongoDB
-    const logEntries = summary.map((item) => {
-      const entry = {
-        timestamp: new Date(),
-        source: "webcam",
-        object_class: item.object || item.class || item.object_class || "unknown",
-        confidence: item.confidence || 0,
-        status: item.status ? item.status.toUpperCase() : (mlData.intrusion_detected ? "INTRUSION" : "UNKNOWN"),
-        uploadedBy: req.user._id,
-        imageUrl: `/processed/${frameName}`
-      };
-      if (assignedOfficers.length > 0) {
-        entry.assignedTo = assignedOfficers;
-      }
-      return entry;
-    });
-
-    if (logEntries.length > 0) {
-      await DetectionLog.insertMany(logEntries);
-    }
-
-    fs.unlinkSync(req.file.path);
-
-    res.json({
-      success: true,
-      detections: logEntries,
-      raw_output: mlData
-    });
+    res.json({ success: true, detections: logs });
   } catch (error) {
-    let details = error.response?.data || error.message;
-    let errorMessage = "Failed to proxy frame to ML service";
-
-    if (typeof details === "string" && details.includes("<!DOCTYPE html>")) {
-      errorMessage = "ML SERVICE OFFLINE: The Hugging Face Space or ML service is down. Please check the service status.";
-      details = "ERR_ML_SERVICE_OFFLINE";
-    }
-
-    console.error("Frame proxy error:", details);
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
-    res.status(502).json({
-      error: errorMessage,
-      details: details,
-    });
+    handleError(res, error, "Frame proxy failed");
   }
 });
+
+// --- HELPER FUNCTIONS ---
+
+function parseDetections(mlData) {
+  const raw = mlData.detections || mlData.summary || [];
+  let detections = Array.isArray(raw) ? raw.map(item => {
+    if (typeof item === 'string') return { object_class: item, confidence: 1.0, status: mlData.intrusion_detected ? "INTRUSION" : "UNKNOWN" };
+    return {
+      object_class: item.object || item.class || "unknown",
+      confidence: item.confidence || 1.0,
+      status: item.status ? item.status.toUpperCase() : (mlData.intrusion_detected ? "INTRUSION" : "UNKNOWN")
+    };
+  }) : [];
+
+  if (mlData.intrusion_detected && detections.length === 0) {
+    detections.push({ object_class: "Intrusion Activity", confidence: 1.0, status: "INTRUSION" });
+  }
+  return detections;
+}
+
+function parseAssignedOfficers(assignedTo) {
+  if (!assignedTo) return [];
+  try {
+    const parsed = JSON.parse(assignedTo);
+    return Array.isArray(parsed) ? parsed : [parsed];
+  } catch {
+    return [assignedTo];
+  }
+}
+
+function extractUniqueVideoDetections(results, mlData, userId, cloudRes, assignedTo) {
+  const unique = [];
+  const seen = new Set();
+  for (const frame of results) {
+    for (const item of (frame.summary || [])) {
+      const obj = item.object || item.class || "unknown";
+      const stat = item.status ? item.status.toUpperCase() : (mlData.intrusion_detected ? "INTRUSION" : "UNKNOWN");
+      const key = `${obj}-${stat}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        unique.push({
+          timestamp: new Date(),
+          source: "video",
+          object_class: obj,
+          confidence: item.confidence || 0,
+          status: stat,
+          uploadedBy: userId,
+          imageUrl: cloudRes.url,
+          cloudinary_id: cloudRes.public_id,
+          assignedTo
+        });
+      }
+    }
+  }
+  return unique;
+}
+
+function handleError(res, error, baseMessage) {
+  let details = error.response?.data || error.message;
+  let msg = baseMessage;
+  if (typeof details === "string" && details.includes("<!DOCTYPE html>")) {
+    msg = "ML SERVICE OFFLINE: The AI engine is currently down.";
+    details = "ERR_ML_SERVICE_OFFLINE";
+  }
+  console.error(`[UPLOAD ERROR] ${baseMessage}:`, details);
+  res.status(502).json({ error: msg, details });
+}
 
 module.exports = router;

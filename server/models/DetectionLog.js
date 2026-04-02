@@ -43,6 +43,10 @@ const detectionLogSchema = new mongoose.Schema(
       type: String,
       required: false,
     },
+    cloudinary_id: {
+      type: String,
+      required: false, // Stores the public_id for easy deletion
+    },
     assignedTo: [{
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
