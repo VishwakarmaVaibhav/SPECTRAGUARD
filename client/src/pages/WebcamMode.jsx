@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import axios from "axios";
+import { RefreshCcw, Monitor, MonitorOff } from "lucide-react";
 
 export default function WebcamMode({ 
   token,
@@ -17,10 +18,11 @@ export default function WebcamMode({
   const [devices, setDevices] = useState([]);
   const [officers, setOfficers] = useState([]);
   const [error, setError] = useState(null);
+  const [mirrorActive, setMirrorActive] = useState(false);
 
   const videoRef = useRef(null);
-  const mediaExplorerRef = useRef(null); 
   const mediaRecorderRef = useRef(null);
+  const restartTimerRef = useRef(null);
 
   const authConfig = { headers: { Authorization: `Bearer ${token}` } };
 
@@ -28,18 +30,18 @@ export default function WebcamMode({
   useEffect(() => {
     fetchOfficers();
     getAvailableCameras();
+    return () => {
+      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+    };
   }, []);
 
-  // Synchronize video element with the stream whenever it changes
+  // Synchronize video element with the stream
   useEffect(() => {
     if (videoRef.current && webcamStream) {
       videoRef.current.srcObject = webcamStream;
-      const playPromise = videoRef.current.play();
-      if (playPromise !== undefined) {
-        playPromise.catch(e => {
-          if (e.name !== 'AbortError') console.error("Video play failed", e);
-        });
-      }
+      videoRef.current.play().catch(e => {
+        if (e.name !== 'AbortError') console.error("Video play failed", e);
+      });
     }
   }, [webcamStream]);
 
@@ -54,8 +56,6 @@ export default function WebcamMode({
 
   const getAvailableCameras = async () => {
     try {
-      // Do NOT prompt for permission here. Just enumerate devices if available.
-      // If permissions haven't been granted, labels might be empty but deviceId might exist.
       const currentDevices = await navigator.mediaDevices.enumerateDevices();
       const videoInputs = currentDevices.filter(d => d.kind === "videoinput");
       setDevices(videoInputs);
@@ -77,13 +77,15 @@ export default function WebcamMode({
       setWebcamStream(stream);
       setWebcamActive(true);
       
-      // Update device labels now that we have permission
       const currentDevices = await navigator.mediaDevices.enumerateDevices();
       const videoInputs = currentDevices.filter(d => d.kind === "videoinput");
       setDevices(videoInputs);
 
-      initRecorder(stream);
+      // Auto-mirror if it looks like a front camera
+      const label = videoInputs.find(d => d.deviceId === (selectedCamera || videoInputs[0].deviceId))?.label?.toLowerCase() || "";
+      if (label.includes("front") || label.includes("user")) setMirrorActive(true);
 
+      initRecorder(stream);
     } catch (err) {
       setError("Failed to start camera feed.");
       console.error(err);
@@ -91,6 +93,7 @@ export default function WebcamMode({
   };
 
   const stopCamera = () => {
+    if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       mediaRecorderRef.current.stop();
     }
@@ -110,7 +113,6 @@ export default function WebcamMode({
     setSelectedCamera(nextDevice);
     if (webcamActive) {
       stopCamera();
-      // Wait a moment for hardware to release
       setTimeout(() => startCameraWithDevice(nextDevice), 500);
     }
   };
@@ -128,56 +130,54 @@ export default function WebcamMode({
     }
   };
 
+  /**
+   * INITIATE RECORDER (Standalone Loop)
+   * This logic stops and starts the recorder every 4 seconds.
+   * Why? To ensure each chunk is a valid standalone WebM file with proper headers
+   * for the ML service to parse correctly.
+   */
   const initRecorder = (stream) => {
-    // Check if the current device is a front-facing camera
-    const currentDevice = devices.find(d => d.deviceId === selectedCamera);
-    const useMirror = currentDevice?.label?.toLowerCase().includes("front") || 
-                      currentDevice?.label?.toLowerCase().includes("user");
+    if (!stream || stream.getVideoTracks().length === 0) return;
 
-    let finalStream = stream;
-
-    // If mirroring is needed, we proxy through a canvas
-    if (useMirror) {
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
+    try {
+      const options = { mimeType: 'video/webm;codecs=vp8' };
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) options.mimeType = 'video/webm';
       
-      // We need these to match the video stream resolution
-      const videoTrack = stream.getVideoTracks()[0];
-      const settings = videoTrack.getSettings();
-      canvas.width = settings.width || 640;
-      canvas.height = settings.height || 480;
+      const recorder = new MediaRecorder(stream, options);
+      mediaRecorderRef.current = recorder;
 
-      const drawFrame = () => {
-        if (!webcamActive) return;
-        ctx.save();
-        ctx.scale(-1, 1);
-        ctx.drawImage(videoRef.current, -canvas.width, 0, canvas.width, canvas.height);
-        ctx.restore();
-        requestAnimationFrame(drawFrame);
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          uploadVideoChunk(event.data);
+        }
       };
-      
-      // Start the proxy loop
-      requestAnimationFrame(drawFrame);
-      finalStream = canvas.captureStream(25); // 25 FPS
-    }
 
-    const options = { mimeType: 'video/webm;codecs=vp8' };
-    if (!MediaRecorder.isTypeSupported(options.mimeType)) options.mimeType = 'video/webm';
-    
-    const recorder = new MediaRecorder(finalStream, options);
-    mediaRecorderRef.current = recorder;
-    recorder.ondataavailable = (event) => {
-      if (event.data && event.data.size > 0) uploadVideoChunk(event.data);
-    };
-    recorder.start(4000); // Reverted to 4s for ML service stability
+      recorder.onstop = () => {
+        // If still active, start a new 4s session
+        if (webcamActive && stream.active) {
+          restartTimerRef.current = setTimeout(() => {
+            if (webcamActive) initRecorder(stream);
+          }, 100); 
+        }
+      };
+
+      recorder.start();
+
+      // Cycle every 4 seconds to create a standalone video file
+      restartTimerRef.current = setTimeout(() => {
+        if (recorder.state === 'recording') recorder.stop();
+      }, 4000);
+
+    } catch (e) {
+      console.error("MediaRecorder init failed", e);
+    }
   };
 
-  const trackingRef = useRef({}); // Persistence for duration tracking: { label: { start: Number, lastSeen: Number } }
+  const trackingRef = useRef({});
 
   const uploadVideoChunk = async (blob) => {
     const formData = new FormData();
-    const startTimeStamp = Date.now();
-    const fileName = `chunk-${startTimeStamp}.webm`;
+    const fileName = `chunk-${Date.now()}.webm`;
     formData.append("file", blob, fileName);
     formData.append("assignedTo", JSON.stringify(assignedOfficers));
 
@@ -190,14 +190,11 @@ export default function WebcamMode({
       const now = Date.now();
       
       if (detections && detections.length > 0) {
-        // Track the current frame's detected classes
         const seenCurrent = new Set();
-        
         const newLogs = detections.map(d => {
           const label = d.object_class || d.class || "Unknown";
           seenCurrent.add(label);
           
-          // Persistence Logic
           if (!trackingRef.current[label]) {
             trackingRef.current[label] = { start: now, lastSeen: now };
           } else {
@@ -215,64 +212,81 @@ export default function WebcamMode({
           };
         });
 
-        // Cleanup: Objects not seen in this chunk for more than a buffer (e.g. 6s) are considered gone
+        // Cleanup stale objects
         Object.keys(trackingRef.current).forEach(label => {
           if (!seenCurrent.has(label)) {
-            const idleTime = now - trackingRef.current[label].lastSeen;
-            if (idleTime > 6000) delete trackingRef.current[label];
+            if (now - trackingRef.current[label].lastSeen > 8000) delete trackingRef.current[label];
           }
         });
         
-        setLiveLogs(prev => {
-          const combined = [...newLogs, ...prev];
-          return combined.slice(0, 100); 
-        });
+        setLiveLogs(prev => [...newLogs, ...prev].slice(0, 50));
       }
     } catch (err) {
-      console.error("Video chunk upload failed:", err);
+      console.error("[WebcamMode] Chunk analysis failed:", err.response?.data || err.message);
     }
   };
-
-  const activeIntrusionsCount = liveLogs.slice(0, 5).filter(l => l.status === "INTRUSION").length;
 
   return (
     <div className="h-full overflow-y-auto pr-2 custom-scrollbar">
       {/* Header */}
-      <div className="mb-6">
-        <h2 className="text-xl font-mono font-bold text-white tracking-wider flex items-center gap-3">
-          <span className="text-sg-green">◉</span> LIVE SURVEILLANCE MODE
-        </h2>
-        <p className="text-xs font-mono text-sg-muted mt-1">
-          REAL-TIME VIDEO STREAM → 4S CHUNKED ML ANALYSIS
-        </p>
+      <div className="mb-6 flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-mono font-bold text-white tracking-wider flex items-center gap-3">
+            <span className="text-sg-green">◉</span> LIVE SURVEILLANCE
+          </h2>
+          <p className="text-[10px] font-mono text-sg-muted mt-1 uppercase">
+            STANDALONE_CHUNK_PROCESSOR_V2 | CYCLE: 4000MS
+          </p>
+        </div>
+        
+        {webcamActive && (
+          <div className="flex gap-2">
+            <button 
+              onClick={() => setMirrorActive(!mirrorActive)}
+              className={`flex items-center gap-2 px-3 py-1.5 font-mono text-[10px] border transition-all ${mirrorActive ? "border-sg-green bg-sg-green/10 text-sg-green" : "border-sg-border text-sg-muted"}`}
+            >
+              {mirrorActive ? <Monitor size={12}/> : <MonitorOff size={12}/>}
+              {mirrorActive ? "MIRROR: ON" : "MIRROR: OFF"}
+            </button>
+            <button 
+              onClick={flipCamera}
+              className="flex items-center gap-2 px-3 py-1.5 font-mono text-[10px] border border-sg-border hover:border-sg-green text-white transition-all bg-sg-panel"
+            >
+              <RefreshCcw size={12} className="animate-spin-slow"/> FLIP_SIGNAL
+            </button>
+          </div>
+        )}
       </div>
 
       {error && (
-        <div className="border-2 border-sg-red bg-sg-red/10 px-4 py-3 mb-4 font-mono text-sm text-sg-red">
-          ⚠ ERROR: {error}
+        <div className="border border-sg-red bg-sg-red/10 px-4 py-3 mb-4 font-mono text-[12px] text-sg-red flex items-center gap-3">
+          <span className="animate-pulse">⚠</span> {error}
         </div>
       )}
 
       {liveLogs.slice(0, 3).some(l => l.status === "INTRUSION") && (
-         <div className="border-2 border-sg-red bg-sg-red/10 px-4 py-3 mb-4 flex items-center gap-3 animate-pulse">
-           <span className="h-3 w-3 bg-sg-red rounded-full"></span>
-           <span className="font-mono text-sm text-sg-red font-bold tracking-wider">
-             ⚠ LIVE_SIGNAL: INTRUSION_ALERT_ACTIVE
+         <div className="border border-sg-red bg-sg-red/20 px-4 py-3 mb-4 flex items-center gap-3 animate-pulse">
+           <span className="h-2 w-2 bg-sg-red rounded-full"></span>
+           <span className="font-mono text-xs text-sg-red font-bold tracking-widest uppercase">
+             INTRUSION_ALERT_ACTIVE
            </span>
          </div>
       )}
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        {/* Camera Feed Area */}
-        <div className="xl:col-span-2">
-          <div className="sg-card relative bg-black flex items-center justify-center p-0 overflow-hidden" style={{ minHeight: "480px" }}>
+        <div className="xl:col-span-2 space-y-4">
+          <div className="sg-card relative bg-black flex items-center justify-center p-0 overflow-hidden" style={{ minHeight: "440px" }}>
             
             {!webcamActive && (
-              <div className="absolute inset-0 flex items-center justify-center border border-sg-border m-4 z-10">
+              <div className="absolute inset-0 flex items-center justify-center border border-sg-border/20 m-4 z-10 bg-black/40">
                 <div className="text-center">
-                  <div className="text-6xl text-sg-border mb-4">◉</div>
-                  <p className="font-mono text-sm text-sg-muted mb-1">DATA SIGNAL — OFFLINE</p>
-                  <p className="font-mono text-xs text-sg-border">NO ACTIVE FEED SESSION</p>
+                  <div className="text-4xl text-sg-border/30 mb-4 font-mono tracking-tighter">DATA_OFFLINE</div>
+                  <button 
+                    onClick={startCamera} 
+                    className="sg-btn-primary px-8 py-3 text-xs"
+                  >
+                    INITIATE_HANDSHAKE
+                  </button>
                 </div>
               </div>
             )}
@@ -282,55 +296,59 @@ export default function WebcamMode({
               autoPlay 
               playsInline 
               muted 
-              className={`w-full max-h-[600px] object-contain transition-opacity duration-300 ${webcamActive ? "opacity-100" : "opacity-0"} ${
-                (devices.find(d => d.deviceId === selectedCamera)?.label?.toLowerCase().includes("front") || 
-                 devices.find(d => d.deviceId === selectedCamera)?.label?.toLowerCase().includes("user")) ? "mirrored-preview" : ""
-              }`}
+              className={`w-full max-h-[600px] object-contain transition-all duration-700 ${webcamActive ? "opacity-100 scale-100" : "opacity-0 scale-95"} ${mirrorActive ? "mirrored-preview" : ""}`}
             />
             
-            {/* Corner brackets overlay */}
-            <div className="pointer-events-none absolute top-6 left-6 w-8 h-8 border-l-2 border-t-2 border-sg-green/40"></div>
-            <div className="pointer-events-none absolute top-6 right-6 w-8 h-8 border-r-2 border-t-2 border-sg-green/40"></div>
-            <div className="pointer-events-none absolute bottom-6 left-6 w-8 h-8 border-l-2 border-b-2 border-sg-green/40"></div>
-            <div className="pointer-events-none absolute bottom-6 right-6 w-8 h-8 border-r-2 border-b-2 border-sg-green/40"></div>
-            {/* Scan line overlay */}
-            {webcamActive && <div className="scanline-overlay"></div>}
+            <div className="pointer-events-none absolute top-4 left-4 w-6 h-6 border-l border-t border-sg-green/30"></div>
+            <div className="pointer-events-none absolute top-4 right-4 w-6 h-6 border-r border-t border-sg-green/30"></div>
+            <div className="pointer-events-none absolute bottom-4 left-4 w-6 h-6 border-l border-b border-sg-green/30"></div>
+            <div className="pointer-events-none absolute bottom-4 right-4 w-6 h-6 border-r border-b border-sg-green/30"></div>
+            {webcamActive && <div className="scanline-overlay pointer-events-none"></div>}
+            
+            {webcamActive && (
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 px-3 py-1 bg-black/60 border border-sg-border/30 font-mono text-[9px] text-sg-green tracking-widest z-10 flex items-center gap-2">
+                <span className="h-1.5 w-1.5 bg-sg-green rounded-full animate-pulse"></span>
+                STREAMING_NODE_01
+              </div>
+            )}
+          </div>
+          
+          <div className="flex gap-4">
+            <button
+              onClick={webcamActive ? stopCamera : startCamera}
+              className={`flex-1 font-mono text-sm tracking-[0.2em] font-bold py-4 transition-all border-2 ${webcamActive ? "border-sg-red text-sg-red hover:bg-sg-red/10" : "border-sg-green text-sg-green hover:bg-sg-green/10"}`}
+            >
+              {webcamActive ? "■ TERMINATE_SIGNAL" : "▶ INITIATE_SESSION"}
+            </button>
           </div>
         </div>
 
-        {/* Control Panel */}
         <div className="space-y-4">
-          <div className="sg-card">
-            <div className="sg-label mb-3">CAMERA CONFIGURATION</div>
+          <div className="sg-card bg-sg-panel/30">
+            <div className="sg-label flex justify-between mb-3">
+              <span>CORE_CONFIGURATION</span>
+              <span className="text-sg-green">SIGNAL_STRENGTH: 98%</span>
+            </div>
             <div className="space-y-4">
-              <div className="flex gap-2">
-                <select 
-                  className="sg-input flex-1"
-                  value={selectedCamera}
-                  onChange={(e) => setSelectedCamera(e.target.value)}
-                  disabled={webcamActive}
-                >
-                  {devices.length === 0 && <option>NO CAMERAS DETECTED</option>}
-                  {devices.map(d => (
-                    <option key={d.deviceId} value={d.deviceId}>
-                      {d.label || `Camera ${d.deviceId.substring(0, 5)}...`}
-                    </option>
-                  ))}
-                </select>
-                <button 
-                  onClick={flipCamera}
-                  className="bg-sg-panel border border-sg-border p-2 hover:border-sg-green"
-                  title="Flip Camera"
-                >
-                  🔄
-                </button>
-              </div>
+              <select 
+                className="sg-input w-full uppercase text-[11px]"
+                value={selectedCamera}
+                onChange={(e) => setSelectedCamera(e.target.value)}
+                disabled={webcamActive}
+              >
+                {devices.length === 0 && <option>DETECTION_ENGINE_STANDBY</option>}
+                {devices.map(d => (
+                  <option key={d.deviceId} value={d.deviceId}>
+                    {d.label.toUpperCase() || `CAMERA_NODE_${d.deviceId.substring(0, 4)}`}
+                  </option>
+                ))}
+              </select>
 
               <div>
-                <label className="sg-label mb-2 block">ASSIGN LOGS TO PERSONNEL (MULTI-SELECT)</label>
-                <div className="max-h-32 overflow-y-auto border border-sg-border bg-sg-black p-2 space-y-1">
+                <label className="sg-label mb-2 block">ASSIGN_REVENUE_PROTECTION</label>
+                <div className="max-h-32 overflow-y-auto border border-sg-border/20 bg-black/40 p-2 space-y-1">
                   {officers.map(o => (
-                    <label key={o._id} className="flex items-center gap-3 cursor-pointer hover:bg-white/5 p-1">
+                    <label key={o._id} className="flex items-center gap-3 cursor-pointer hover:bg-white/5 p-1 group">
                       <input 
                         type="checkbox"
                         checked={assignedOfficers.includes(o._id)}
@@ -338,50 +356,44 @@ export default function WebcamMode({
                           if (e.target.checked) setAssignedOfficers([...assignedOfficers, o._id]);
                           else setAssignedOfficers(assignedOfficers.filter(id => id !== o._id));
                         }}
-                        className="accent-sg-green"
+                        className="accent-sg-green w-3 h-3"
                       />
-                      <span className="text-xs font-mono text-white uppercase">{o.username}</span>
+                      <span className="text-[10px] font-mono text-white/70 group-hover:text-sg-green transition-colors uppercase tracking-tighter">
+                        {o.username}
+                      </span>
                     </label>
                   ))}
-                  {officers.length === 0 && <div className="text-[10px] text-sg-muted italic">NO PERSONNEL REGISTERED</div>}
+                  {officers.length === 0 && <div className="text-[10px] text-sg-muted italic text-center py-4">NO_NODES_FOUND</div>}
                 </div>
-                <p className="text-[8px] font-mono text-sg-muted mt-2 leading-tight">
-                  Selected personnel will receive real-time detection telemetry for this channel.
-                </p>
               </div>
             </div>
           </div>
 
-          <button
-            onClick={webcamActive ? stopCamera : startCamera}
-            className={webcamActive ? "sg-btn-danger w-full py-4 text-base" : "sg-btn-primary w-full py-4 text-base"}
-          >
-            {webcamActive ? "■ TERMINATE FEED" : "◉ INITIATE PERSISTENT FEED"}
-          </button>
-
-          <div className="sg-card">
-             <div className="flex justify-between items-center mb-2">
-               <div className="sg-label">LIVE DATA PREVIEW (REAL-TIME)</div>
+          <div className="sg-card bg-sg-panel/10 flex-1 border-dashed">
+             <div className="flex justify-between items-center mb-4">
+               <div className="sg-label">REAL_TIME_TELEMETRY</div>
                {liveLogs.length > 0 && (
-                 <button onClick={() => setLiveLogs([])} className="text-xs font-mono text-sg-muted hover:text-white">PURGE_TEMP</button>
+                 <button onClick={() => setLiveLogs([])} className="text-[9px] font-mono text-sg-muted hover:text-sg-red tracking-widest border border-sg-border/30 px-2">PURGE</button>
                )}
              </div>
              
-             <div className="log-box pr-2 overflow-y-auto" style={{ maxHeight: "300px" }}>
+             <div className="log-box !bg-transparent !p-0 custom-scrollbar" style={{ maxHeight: "310px" }}>
                {liveLogs.length === 0 ? (
-                 <div className="text-sg-muted font-mono text-[10px]">
-                   {webcamActive ? "[ SIGNAL_ESTABLISHED: AWAITING_DETECTION... ]" : "[ STANDBY: SELECT_SOURCE_AND_INITIATE ]"}
+                 <div className="text-sg-muted/50 font-mono text-[9px] text-center mt-20 italic">
+                   {webcamActive ? "[ ANALYZING_CONTINUUM... ]" : "[ SIGNAL_DORMANT ]"}
                  </div>
                ) : (
                  liveLogs.map((log, i) => (
-                   <div key={i} className="log-entry font-mono border-b border-sg-border/30 pb-1 mb-1 animate-in fade-in slide-in-from-right duration-300">
-                     <span className="text-sg-muted text-[9px] w-14 inline-block">[{log.ts}]</span>
-                     <span className={`text-[10px] ml-1 ${log.status === "INTRUSION" ? "text-sg-red font-bold" : log.status === "AUTHORIZED" ? "text-sg-green" : "text-white"}`}>
-                       ■ {log.status}
-                     </span>
-                      <span className="text-white text-[10px] ml-1 uppercase">{log.object_class}</span>
-                      <span className="text-sg-green text-[9px] ml-2 font-bold px-1 border border-sg-green/30">{log.duration}</span>
-                      <span className="text-sg-muted text-[10px] float-right">{(Number(log.confidence) * 100).toFixed(0)}%</span>
+                   <div key={i} className="log-entry font-mono border-b border-sg-border/10 pb-2 mb-2 flex items-center justify-between">
+                     <div className="flex items-center gap-2">
+                       <span className={`h-1.5 w-1.5 rounded-full ${log.status === "INTRUSION" ? "bg-sg-red shadow-[0_0_5px_#ff0000]" : "bg-sg-green"}`}></span>
+                       <span className="text-[10px] text-white uppercase">{log.object_class}</span>
+                       {log.status === "INTRUSION" && <span className="text-[8px] bg-sg-red text-white px-1 font-bold">ALERT</span>}
+                     </div>
+                     <div className="text-right flex flex-col items-end">
+                       <div className="text-[9px] text-sg-muted">{log.ts}</div>
+                       <div className="text-[9px] text-sg-green">{log.duration}</div>
+                     </div>
                    </div>
                  ))
                )}
